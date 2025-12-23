@@ -1,0 +1,88 @@
+name: Genie PR Review (Reusable)
+
+on:
+  workflow_call:
+    secrets:
+      OPENAI_API_KEY:
+        required: true
+      OPENAI_BASE_URL:
+        required: true
+      OPENAI_API_VERSION:
+        required: true
+      OPENAI_DEPLOYMENT_MODEL:
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  ai-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Fetch PR code changes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          echo "Fetching changed files for PR #$PR_NUMBER"
+          page=1
+          per_page=100
+          > pr_changes.txt
+
+          while true; do
+            response=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$OWNER/$REPO/pulls/$PR_NUMBER/files?per_page=$per_page&page=$page")
+
+            files_count=$(echo "$response" | jq length)
+            if [ "$files_count" -eq 0 ]; then break; fi
+
+            echo "$response" | jq -r '.[] |
+              "FILE: \(.filename)\nSTATUS: \(.status)\n---\n\(.patch // "No diff available")\n\n"' \
+              >> pr_changes.txt
+
+            page=$((page + 1))
+          done
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Checkout Genie repo (Repo A) to get scripts
+        uses: actions/checkout@v4
+        with:
+          repository: sarathnethi/review-genie
+          ref: v1
+          path: _ai_pr_review
+
+      - name: Install dependencies
+        run: npm install openai
+
+
+      - name: Run AI PR Review and post PR review comment
+        env:
+          # Azure OpenAI (passed from Repo B)
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_API_VERSION: ${{ secrets.OPENAI_API_VERSION }}
+          OPENAI_DEPLOYMENT_MODEL: ${{ secrets.OPENAI_DEPLOYMENT_MODEL }}
+
+          # GitHub context
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          node _ai_pr_review/scripts/ai-pr-review.mjs
