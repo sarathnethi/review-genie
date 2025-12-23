@@ -59,7 +59,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: sarathnethi/review-genie
-          ref: v1
+          ref: main
           path: _ai_pr_review
 
       - name: Install dependencies
